@@ -29,11 +29,12 @@ type FileSystem interface {
 	Remove(int) error
 
 	Write(int, DataBlock) error
-	Read(int) (DataBlock, error) 
+	Read(int) (DataBlock, error)
+	Cat(int) error
 }
 
 type FS struct {
-	disk *disk.Disk
+	disk            *disk.Disk
 	freeBlockBitMap []uint32 // Hold record of used or unused blocks
 	superBlock      SuperBlock
 	inodeBlocks     []*InodeBlock
@@ -193,7 +194,7 @@ func (fs *FS) Write(inumber int, data DataBlock) error {
 	}
 	// update free block bitmap
 	fs.freeBlockBitMap[inumber] = 1
-	return nil 
+	return nil
 }
 
 func (fs *FS) Remove(inumber int) error {
@@ -215,9 +216,8 @@ func (fs *FS) Stat(inumber int) (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("Could not read inode block: %s", err.Error())
 	}
-	return len(dblock.Data), nil 
+	return len(dblock.Data), nil
 }
-
 
 func (fs *FS) Create() (inumber int, err error) {
 	inumber = -1
@@ -225,22 +225,26 @@ func (fs *FS) Create() (inumber int, err error) {
 	// Read Inode blocks
 	err = fs.loadInodeBlocks(fs.disk, int(fs.superBlock.InodeBlocks), iblocks)
 	if err != nil {
-		return 
+		return
 	}
 
 	for _, iblock := range iblocks {
 		for id, inode := range iblock.Inodes {
 			if inode.Valid == 0 {
-				inumber = id 
+				inumber = id
 				inode.Valid = 1
 				// set inode block index as used
 				fs.freeBlockBitMap[inumber] = 1
-				return 
+				return
 			}
 		}
 
 	}
 	return
+}
+
+func (fs *FS) Cat(inumber int) error {
+	return nil
 }
 
 /* utillity filesystem functions */
@@ -253,8 +257,7 @@ func (fs *FS) initFreeBlockBitMap(dsk *disk.Disk) error {
 	fs.freeBlockBitMap[0] = 1
 	for _, iblock := range fs.inodeBlocks {
 		for _, inode := range iblock.Inodes {
-			// TODO: also check that inode is valid i.e inode.Valid?
-			if inode.Size > 0 {
+			if inode.Size > 0 && inode.Valid == 1 {
 				for _, dblock := range inode.Direct {
 					fs.freeBlockBitMap[dblock] = 1
 				}
@@ -351,7 +354,7 @@ func (fs *FS) loadSuperBlock(dsk *disk.Disk, sblock *SuperBlock) error {
 	return nil
 }
 
-func (fs *FS) isfreeblock(inumber int ) bool {
+func (fs *FS) isfreeblock(inumber int) bool {
 	if len(fs.freeBlockBitMap) < inumber {
 		return false
 	}
