@@ -78,7 +78,7 @@ func (fs *FS) Debug(dsk *disk.Disk) error {
 		return err
 	}
 	fmt.Printf("SuperBlock:\n")
-	if sblock.MagicNumber != MAGIC_NUMBER {
+	if sblock.MagicNumber == MAGIC_NUMBER {
 		fmt.Printf("    magic number is valid\n")
 	}
 	fmt.Printf("    %d blocks\n", sblock.Blocks)
@@ -272,13 +272,14 @@ func (fs *FS) Write(inumber int, data []byte) (inode *Inode, err error) {
 	(*inodeBlock).Inodes[inumber] = *inode
 
 	var buf [disk.BLOCK_SIZE]byte
-	err = binary.Write(bytes.NewBuffer(buf[:]), enc, inodeBlock)
+	writeBuf := bytes.NewBuffer(buf[:0])
+	err = binary.Write(writeBuf, enc, inodeBlock)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to write to inode block: %s", err.Error())
 	}
 
-	err = fs.disk.Write(inodeBlockIdx, buf[:])
+	err = fs.disk.Write(inodeBlockIdx, writeBuf.Bytes())
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to write to inode block: %s", err.Error())
@@ -301,22 +302,18 @@ func (fs *FS) Remove(inumber int) error {
 		return err
 	}
 
-	var inode *Inode
+	var inode Inode
 	var inodeBlockIdx int
 	var inodeBlock *InodeBlock
 	for idx, iblock := range iblocks {
 		for id, v := range iblock.Inodes {
 			if id == inumber {
-				inode = &v
+				inode = v
 				inodeBlockIdx = idx + 1
 				inodeBlock = iblock
 				break
 			}
 		}
-	}
-
-	if inode == nil {
-		return fmt.Errorf("failed to remove inode %d: inode not found", inumber)
 	}
 
 	var buf [disk.BLOCK_SIZE]byte
@@ -348,14 +345,15 @@ func (fs *FS) Remove(inumber int) error {
 	inode.Indirect = 0
 
 	// write update inode back into disk
-	(*inodeBlock).Inodes[inumber] = *inode
-	err = binary.Write(bytes.NewBuffer(buf[:]), enc, inodeBlock)
+	(*inodeBlock).Inodes[inumber] = inode
+	writeBuf := bytes.NewBuffer(buf[:0])
+	err = binary.Write(writeBuf, enc, inodeBlock)
 
 	if err != nil {
 		return fmt.Errorf(errMsg, inumber, err.Error())
 	}
 
-	err = fs.disk.Write(inodeBlockIdx, buf[:])
+	err = fs.disk.Write(inodeBlockIdx, writeBuf.Bytes())
 
 	if err != nil {
 		return fmt.Errorf(errMsg, inumber, err.Error())
@@ -381,15 +379,37 @@ func (fs *FS) Create() (inumber int, err error) {
 		return
 	}
 
-	for _, iblock := range iblocks {
-		for id, inode := range iblock.Inodes {
-			if inode.Valid == 0 {
+	var inode Inode
+	var inodeBlockIdx int
+	var inodeBlock *InodeBlock
+
+	for idx, iblock := range iblocks {
+		for id, v := range iblock.Inodes {
+			if id > 0 && v.Valid == 0 {
 				inumber = id
-				return
+				inode = v
+				inodeBlockIdx = idx + 1
+				inodeBlock = iblock
+				break
 			}
 		}
 
 	}
+
+	var buf [disk.BLOCK_SIZE]byte
+
+	inode.Valid = 1
+
+	(*inodeBlock).Inodes[inumber] = inode
+	writeBuf := bytes.NewBuffer(buf[:0])
+	err = binary.Write(writeBuf, enc, inodeBlock)
+
+	if err != nil {
+		return inumber, fmt.Errorf("failed to write to inode block: %s", err.Error())
+	}
+
+	err = fs.disk.Write(inodeBlockIdx, writeBuf.Bytes())
+
 	return
 }
 
