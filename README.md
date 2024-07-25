@@ -7,7 +7,7 @@ A basic unix-like filesystem using a disk emulator. This implementation is based
 
 To access the filesystem you need a shell, specify a byte data file used by the disk emulator i.e 
 ```bash
-$ go run build .
+$ go build .
 $ ./simplefs image.5 5
 ```
 
