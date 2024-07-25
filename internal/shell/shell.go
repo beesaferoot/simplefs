@@ -3,6 +3,7 @@ package shell
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	ds "simplefs/internal/disk"
 	"simplefs/internal/fs"
@@ -110,7 +111,35 @@ func (shell *Shell) Init() {
 			} else {
 				fmt.Printf("created inode %d.\n", inode)
 			}
+		case "copyout":
+			if len(args) < 3 {
+				fmt.Printf("Usage: copyout <inode> <file>\n")
+			} else {
+				inode, _ := strconv.Atoi(args[1])
+				filePath := args[2]
+				bytesCopied, err := shell.CopyOut(inode, filePath)
+				if err != nil {
+					fmt.Printf("failed on copyout command: %s\n", err.Error())
+					return
+				}
+				fmt.Printf("%d bytes copied\n", bytesCopied)
+			}
+			break
+		case "copyin":
+			if len(args) < 3 {
+				fmt.Printf("Usage: copyin <file> <inode>\n")
+			} else {
+				filePath := args[1]
+				inode, _ := strconv.Atoi(args[2])
 
+				bytesCopied, err := shell.CopyIn(filePath, inode)
+				if err != nil {
+					fmt.Printf("failed on copyin command: %s\n", err.Error())
+					return
+				}
+				fmt.Printf("%d bytes copied\n", bytesCopied)
+			}
+			break
 		case "quit", "exit":
 			return
 		default:
@@ -118,6 +147,80 @@ func (shell *Shell) Init() {
 			break
 		}
 	}
+}
+
+func (shell *Shell) CopyOut(inumber int, filePath string) (int32, error) {
+	file, err := os.OpenFile(filePath, os.O_CREATE, 0600)
+	defer file.Close()
+
+	if err != nil {
+		return -1, err
+	}
+
+	inode, err := shell.filesystem.Read(inumber)
+
+	if err != nil {
+		return -1, err
+	}
+
+	writeBuf := bufio.NewWriter(file)
+
+	var readBuf [ds.BLOCK_SIZE]byte
+
+	bytesCopied := 0
+
+	for _, blocknum := range inode.Direct {
+		if blocknum > 0 {
+			err := shell.disk.Read(int(blocknum), readBuf[:])
+			if err != nil {
+				return -1, err
+			}
+			n, err := writeBuf.Write(readBuf[:])
+			if err != nil {
+				return -1, err
+			}
+			bytesCopied += n
+		}
+
+	}
+
+	return int32(bytesCopied), nil
+
+}
+
+func (shell *Shell) CopyIn(filePath string, inumber int) (int32, error) {
+	file, err := os.Open(filePath)
+	defer file.Close()
+
+	if err != nil {
+		return -1, err
+	}
+
+	readBuf := bufio.NewReader(file)
+	var writeBuf [ds.BLOCK_SIZE]byte
+	bytesCopied := 0
+
+	for {
+		n, err := readBuf.Read(writeBuf[:])
+
+		if err == io.EOF {
+			return int32(bytesCopied), nil
+		}
+
+		if err != nil {
+			return -1, err
+		}
+
+		_, err = shell.filesystem.Write(inumber, writeBuf[:n])
+
+		if err != nil {
+			return -1, err
+		}
+
+		bytesCopied += n
+
+	}
+
 }
 
 func (shell *Shell) helpCmd() {
