@@ -19,7 +19,7 @@ func NewShell(path string, nblocks int) *Shell {
 	disk := &ds.Disk{}
 	err := disk.Open(path, nblocks)
 	if err != nil {
-		fmt.Printf("Failed to open disk: %s\n", err)
+		fmt.Printf("failed to open disk: %s\n", err.Error())
 		os.Exit(1)
 	}
 	filesystem := fs.NewFS()
@@ -36,7 +36,7 @@ func (shell *Shell) Init() {
 		fmt.Print("sfs> ")
 		input, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Printf("Failed to read input: %s\n", err)
+			fmt.Printf("failed to read input: %s\n", err.Error())
 			return
 		}
 
@@ -49,15 +49,21 @@ func (shell *Shell) Init() {
 			shell.helpCmd()
 			break
 		case "format":
-			shell.filesystem.Format(shell.disk)
+			ok := shell.filesystem.Format(shell.disk)
+			if ok {
+				fmt.Println("disk formatted.")
+			}
 			break
 		case "mount":
-			shell.filesystem.Mount(shell.disk)
+			ok := shell.filesystem.Mount(shell.disk)
+			if ok {
+				fmt.Println("disk mounted.")
+			}
 			break
 		case "debug":
 			err := shell.filesystem.Debug(shell.disk)
 			if err != nil {
-				fmt.Printf("Failure on debug command: %s\n", err)
+				fmt.Printf("failure on debug command: %s\n", err.Error())
 			}
 			break
 		case "stat":
@@ -65,7 +71,12 @@ func (shell *Shell) Init() {
 				fmt.Printf("Usage: stat <inode>\n")
 			} else {
 				inode, _ := strconv.Atoi(args[1])
-				shell.filesystem.Stat(inode)
+				numBytes, err := shell.filesystem.Stat(inode)
+				if err != nil {
+					fmt.Printf("failure on stat command: %s\n", err.Error())
+				} else {
+					fmt.Printf("inode %d has size %d bytes.\n", inode, numBytes)
+				}
 			}
 			break
 		case "cat":
@@ -73,7 +84,10 @@ func (shell *Shell) Init() {
 				fmt.Printf("Usage: cat <inode>\n")
 			} else {
 				inode, _ := strconv.Atoi(args[1])
-				shell.filesystem.Cat(inode)
+				err := shell.filesystem.Cat(inode)
+				if err != nil {
+					fmt.Printf("failure on cat command: %s\n", err.Error())
+				}
 			}
 			break
 		case "remove":
@@ -83,14 +97,24 @@ func (shell *Shell) Init() {
 				inode, _ := strconv.Atoi(args[1])
 				err := shell.filesystem.Remove(inode)
 				if err != nil {
-					fmt.Printf("Failure on remove command: %s\n", err)
+					fmt.Printf("failure on remove command: %s\n", err.Error())
+				} else {
+					fmt.Printf("removed inode %d.\n", inode)
 				}
 			}
 			break
-		case "exit":
-		case "quit":
+		case "create":
+			inode, err := shell.filesystem.Create()
+			if err != nil {
+				fmt.Printf("failure on create command: %s\n", err.Error())
+			} else {
+				fmt.Printf("created inode %d.\n", inode)
+			}
+
+		case "quit", "exit":
 			return
 		default:
+			shell.helpCmd()
 			break
 		}
 	}
@@ -101,9 +125,12 @@ func (shell *Shell) helpCmd() {
 	format
 	mount
 	debug
+	create
 	remove  <inode>
 	cat     <inode>
 	stat    <inode>
+	copyin  <file> <inode>
+	copyout <inode> <file>
 	help
 	quit
 	exit`)

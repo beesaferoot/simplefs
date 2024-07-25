@@ -3,9 +3,11 @@ package fs
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"simplefs/internal/disk"
+	"strconv"
 )
 
 const (
@@ -28,8 +30,8 @@ type FileSystem interface {
 	Stat(int) (int, error)
 	Remove(int) error
 
-	Write(int, DataBlock) error
-	Read(int) (DataBlock, error)
+	Write(int, []byte) (*Inode, error)
+	Read(int) (*Inode, error)
 	Cat(int) error
 }
 
@@ -76,6 +78,9 @@ func (fs *FS) Debug(dsk *disk.Disk) error {
 		return err
 	}
 	fmt.Printf("SuperBlock:\n")
+	if sblock.MagicNumber != MAGIC_NUMBER {
+		fmt.Printf("    magic number is valid\n")
+	}
 	fmt.Printf("    %d blocks\n", sblock.Blocks)
 	fmt.Printf("    %d inode blocks\n", sblock.InodeBlocks)
 	fmt.Printf("    %d inodes\n", sblock.Inodes)
@@ -92,12 +97,17 @@ func (fs *FS) Debug(dsk *disk.Disk) error {
 			if v.Size > 0 {
 				fmt.Printf("inode %d:\n", id)
 				fmt.Printf("    size: %d bytes\n", v.Size)
-				fmt.Printf("    direct blocks: %v\n", v.Direct)
-				fmt.Printf("    indirect blocks: %v\n", v.Indirect)
+				fmt.Printf("    direct blocks: %s\n", mapToString(v.Direct[:]))
+				if v.Indirect > 0 {
+					fmt.Printf("    indirect blocks: %v\n", v.Indirect)
+				}
+
 			}
 		}
 
 	}
+	fmt.Printf("%d disk block reads\n", dsk.Reads)
+	fmt.Printf("%d disk block writes\n", dsk.Writes)
 	fmt.Printf("Freeblock bitmap %v\n", fs.freeBlockBitMap)
 	return nil
 }
@@ -166,11 +176,19 @@ func (fs *FS) Mount(disk *disk.Disk) bool {
 	return true
 }
 
-func (fs *FS) Read(inumber int) (data DataBlock, err error) {
+func (fs *FS) Read(inumber int) (inode *Inode, err error) {
+	inode, err = fs.loadInode(inumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read inode %d: %s", inumber, err.Error())
+	}
+	return
+}
+
+func (fs *FS) ReadDataBlock(blocknum int) (data DataBlock, err error) {
 	var buf [disk.BLOCK_SIZE]byte
 	data = DataBlock{}
 	// read inode block from disk
-	err = fs.disk.Read(inumber, buf[:])
+	err = fs.disk.Read(blocknum, buf[:])
 	if err != nil {
 		return
 	}
@@ -178,45 +196,180 @@ func (fs *FS) Read(inumber int) (data DataBlock, err error) {
 	return
 }
 
-func (fs *FS) Write(inumber int, data DataBlock) error {
-	if !fs.isfreeblock(inumber) {
-		return fmt.Errorf("trying to write to a used inode block")
-	}
-	buf := &bytes.Buffer{}
-	// write disk to inode block
-	err := binary.Write(buf, enc, &data)
+func (fs *FS) loadInode(inumber int) (inode *Inode, err error) {
+	iblocks := make([]*InodeBlock, fs.superBlock.InodeBlocks)
+	// Read Inode blocks
+	err = fs.loadInodeBlocks(fs.disk, int(fs.superBlock.InodeBlocks), iblocks)
 	if err != nil {
-		return err
+		return
 	}
-	err = fs.disk.Write(inumber, buf.Bytes())
+	for _, iblock := range iblocks {
+		for id, v := range iblock.Inodes {
+			if id == inumber {
+				return &v, nil
+			}
+		}
+	}
+	return
+}
+
+func (fs *FS) Write(inumber int, data []byte) (inode *Inode, err error) {
+
+	iblocks := make([]*InodeBlock, fs.superBlock.InodeBlocks)
+	// Read Inode blocks
+	err = fs.loadInodeBlocks(fs.disk, int(fs.superBlock.InodeBlocks), iblocks)
+
 	if err != nil {
-		return fmt.Errorf("Failed to write to inode block: %s", err.Error())
+		return
 	}
+
+	var inodeBlockIdx int
+	var inodeBlock *InodeBlock
+	for idx, iblock := range iblocks {
+		for id, v := range iblock.Inodes {
+			if id == inumber {
+				inode = &v
+				inodeBlockIdx = idx + 1
+				inodeBlock = iblock
+				break
+			}
+		}
+	}
+
+	if inode == nil {
+		return nil, fmt.Errorf("failed to write inode %d: inode not found", inumber)
+	}
+
+	bytesToWrite := len(data)
+
+	blocknum := int(fs.superBlock.InodeBlocks) + 1
+
+	// search for free disk blocks to write inode data into
+	for {
+		if !fs.isValidBlock(blocknum) {
+			return nil, errors.New("attempt to access disk block")
+		}
+
+		if fs.isFreeblock(blocknum) {
+			break
+		}
+		blocknum += 1
+	}
+	err = fs.disk.Write(blocknum, data)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to write to inode block: %s", err.Error())
+	}
+
+	inode.Size += uint32(bytesToWrite)
+
+	for idx, bn := range inode.Direct {
+		if bn == 0 {
+			inode.Direct[idx] = uint32(blocknum)
+		}
+	}
+
+	(*inodeBlock).Inodes[inumber] = *inode
+
+	var buf [disk.BLOCK_SIZE]byte
+	err = binary.Write(bytes.NewBuffer(buf[:]), enc, inodeBlock)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to write to inode block: %s", err.Error())
+	}
+
+	err = fs.disk.Write(inodeBlockIdx, buf[:])
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to write to inode block: %s", err.Error())
+	}
+
 	// update free block bitmap
-	fs.freeBlockBitMap[inumber] = 1
-	return nil
+	fs.freeBlockBitMap[blocknum] = 1
+
+	return inode, nil
 }
 
 func (fs *FS) Remove(inumber int) error {
-	dblock := DataBlock{}
-	buf := &bytes.Buffer{}
-	err := binary.Write(buf, enc, &dblock)
-	// clear inode block
-	err = fs.disk.Write(inumber, buf.Bytes())
+	errMsg := "failed to remove to data block (%d): %s"
+
+	iblocks := make([]*InodeBlock, fs.superBlock.InodeBlocks)
+	// Read Inode blocks
+	err := fs.loadInodeBlocks(fs.disk, int(fs.superBlock.InodeBlocks), iblocks)
+
 	if err != nil {
-		return fmt.Errorf("Failed to clear inode block: %s", err.Error())
+		return err
 	}
-	// update free block bitmap
-	fs.freeBlockBitMap[inumber] = 0
+
+	var inode *Inode
+	var inodeBlockIdx int
+	var inodeBlock *InodeBlock
+	for idx, iblock := range iblocks {
+		for id, v := range iblock.Inodes {
+			if id == inumber {
+				inode = &v
+				inodeBlockIdx = idx + 1
+				inodeBlock = iblock
+				break
+			}
+		}
+	}
+
+	if inode == nil {
+		return fmt.Errorf("failed to remove inode %d: inode not found", inumber)
+	}
+
+	var buf [disk.BLOCK_SIZE]byte
+
+	for idx, blocknum := range inode.Direct {
+		if blocknum > 0 {
+			err = fs.disk.Write(int(blocknum), buf[:])
+			if err != nil {
+				return fmt.Errorf(errMsg, blocknum, err.Error())
+			}
+			inode.Direct[idx] = 0
+			fs.freeBlockBitMap[blocknum] = 0
+		}
+
+	}
+
+	if inode.Indirect > 0 {
+		blocknum := int(inode.Indirect)
+		err = fs.disk.Write(int(inode.Indirect), buf[:])
+		if err != nil {
+			return fmt.Errorf(errMsg, blocknum, err.Error())
+		}
+		fs.freeBlockBitMap[blocknum] = 0
+	}
+
+	// reset inode
+	inode.Valid = 0
+	inode.Size = 0
+	inode.Indirect = 0
+
+	// write update inode back into disk
+	(*inodeBlock).Inodes[inumber] = *inode
+	err = binary.Write(bytes.NewBuffer(buf[:]), enc, inodeBlock)
+
+	if err != nil {
+		return fmt.Errorf(errMsg, inumber, err.Error())
+	}
+
+	err = fs.disk.Write(inodeBlockIdx, buf[:])
+
+	if err != nil {
+		return fmt.Errorf(errMsg, inumber, err.Error())
+	}
+
 	return nil
 }
 
 func (fs *FS) Stat(inumber int) (int, error) {
-	dblock, err := fs.Read(inumber)
+	inode, err := fs.Read(inumber)
 	if err != nil {
-		return -1, fmt.Errorf("Could not read inode block: %s", err.Error())
+		return -1, fmt.Errorf("could not read inode block: %s", err.Error())
 	}
-	return len(dblock.Data), nil
+	return int(inode.Size), nil
 }
 
 func (fs *FS) Create() (inumber int, err error) {
@@ -232,9 +385,6 @@ func (fs *FS) Create() (inumber int, err error) {
 		for id, inode := range iblock.Inodes {
 			if inode.Valid == 0 {
 				inumber = id
-				inode.Valid = 1
-				// set inode block index as used
-				fs.freeBlockBitMap[inumber] = 1
 				return
 			}
 		}
@@ -244,6 +394,22 @@ func (fs *FS) Create() (inumber int, err error) {
 }
 
 func (fs *FS) Cat(inumber int) error {
+	inode, err := fs.Read(inumber)
+	if err != nil {
+		return fmt.Errorf("could not read inode block: %s", err.Error())
+	}
+
+	for _, dblockNum := range inode.Direct {
+		if dblockNum > 0 {
+			dblock, err := fs.ReadDataBlock(int(dblockNum))
+			if err != nil {
+				return fmt.Errorf("could not read inode block: %s", err.Error())
+			}
+			fmt.Printf("%s", dblock.Data[:])
+		}
+
+	}
+
 	return nil
 }
 
@@ -273,7 +439,10 @@ func (fs *FS) initFreeBlockBitMap(dsk *disk.Disk) error {
 					}
 					fmt.Printf("Indirect block pointers: %v", Pointers)
 					for _, p := range Pointers {
-						fs.freeBlockBitMap[p] = 1
+						if p != 0 {
+							fs.freeBlockBitMap[p] = 1
+						}
+
 					}
 				}
 
@@ -354,12 +523,20 @@ func (fs *FS) loadSuperBlock(dsk *disk.Disk, sblock *SuperBlock) error {
 	return nil
 }
 
-func (fs *FS) isfreeblock(inumber int) bool {
-	if len(fs.freeBlockBitMap) < inumber {
-		return false
+func (fs *FS) isValidBlock(blocknum int) bool {
+	return len(fs.freeBlockBitMap) > blocknum
+}
+
+func (fs *FS) isFreeblock(blocknum int) bool {
+	return fs.freeBlockBitMap[blocknum] == 0
+}
+
+func mapToString(arr []uint32) string {
+	res := ""
+
+	for v := range arr {
+		res += strconv.Itoa(int(arr[v])) + " "
 	}
-	if fs.freeBlockBitMap[inumber] != 0 {
-		return false
-	}
-	return true
+
+	return res
 }

@@ -7,7 +7,7 @@ import (
 )
 
 /*
-	Disk emulator
+Disk emulator
 */
 const BLOCK_SIZE = 4096
 
@@ -97,7 +97,13 @@ func (d *Disk) Read(blocknum int, data []byte) error {
 //
 // data: Buffer to write from
 func (d *Disk) Write(blocknum int, data []byte) error {
+
+	if BLOCK_SIZE < len(data) {
+		return fmt.Errorf("Unable to write to block (%d): size of data greater than %d bytes", blocknum, BLOCK_SIZE)
+	}
+
 	err := d.sanityCheck(blocknum)
+
 	if err != nil {
 		return err
 	}
@@ -105,13 +111,13 @@ func (d *Disk) Write(blocknum int, data []byte) error {
 	if _, err := file.Seek(int64(blocknum*BLOCK_SIZE), os.SEEK_SET); err != nil {
 		return fmt.Errorf("Unable to seek block (%d): %s", blocknum, err.Error())
 	}
+
 	written_bytes, err := file.Write(data)
 	if err != nil {
 		return fmt.Errorf("Unable to write to block (%d): %s", blocknum, err.Error())
 	}
 	if written_bytes > BLOCK_SIZE {
 		fmt.Printf("written_bytes = %d\n", written_bytes)
-		return fmt.Errorf("Unable to write to block (%d)", blocknum)
 	}
 	d.Writes++
 	return nil
