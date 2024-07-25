@@ -39,4 +39,4 @@ $ make test
 
 ### License
 
-simplefs is distributed under the [MIT License.](https://github.com/beesaferoot/simplefs/blob/master/LICENSE.txt)
+simplefs is distributed under the [MIT License.](https://github.com/beesaferoot/simplefs/blob/main/LICENSE.txt)
