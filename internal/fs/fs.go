@@ -266,6 +266,7 @@ func (fs *FS) Write(inumber int, data []byte) (inode *Inode, err error) {
 	for idx, bn := range inode.Direct {
 		if bn == 0 {
 			inode.Direct[idx] = uint32(blocknum)
+			break
 		}
 	}
 
