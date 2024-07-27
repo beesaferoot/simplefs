@@ -71,24 +71,24 @@ func (d *Disk) Mount() {
 // blocknum: Block to read from
 //
 // data: Buffer to read into
-func (d *Disk) Read(blocknum int, data []byte) error {
+func (d *Disk) Read(blocknum int, data []byte) (int, error) {
 	err := d.sanityCheck(blocknum)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	file := os.NewFile(uintptr(d.FileDescriptor), "image file")
 	if _, err := file.Seek(int64(blocknum*BLOCK_SIZE), os.SEEK_SET); err != nil {
-		return fmt.Errorf("Unable to seek %d: %s", blocknum, err.Error())
+		return -1, fmt.Errorf("Unable to seek %d: %s", blocknum, err.Error())
 	}
 	read_bytes, err := file.Read(data)
 	if err != nil {
-		return fmt.Errorf("Unable to read %d: %s", blocknum, err.Error())
+		return -1, fmt.Errorf("Unable to read %d: %s", blocknum, err.Error())
 	}
 	if read_bytes != BLOCK_SIZE {
-		return fmt.Errorf("Unable to read %d", blocknum)
+		return -1, fmt.Errorf("Unable to read %d", blocknum)
 	}
 	d.Reads++
-	return nil
+	return read_bytes, nil
 }
 
 // Write block to disk

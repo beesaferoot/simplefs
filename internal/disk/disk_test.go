@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDiskEmulator(t *testing.T){
-	for scenario, fn := range map[string] func (t *testing.T, d *Disk, tfn func(*Disk)){
+func TestDiskEmulator(t *testing.T) {
+	for scenario, fn := range map[string]func(t *testing.T, d *Disk, tfn func(*Disk)){
 		"open disk image": testOpen,
-		"write to disk": testWrite,
-		"read from disk": testRead,
-	}{
+		"write to disk":   testWrite,
+		"read from disk":  testRead,
+	} {
 		t.Run(scenario, func(t *testing.T) {
 			disk := &Disk{}
 			fn(t, disk, tearDown)
@@ -21,7 +21,7 @@ func TestDiskEmulator(t *testing.T){
 	}
 }
 
-func tearDown(disk *Disk){
+func tearDown(disk *Disk) {
 	err := disk.Close()
 	if err != nil {
 		log.Fatal(err)
@@ -31,7 +31,7 @@ func tearDown(disk *Disk){
 	}
 }
 
-func testOpen(t *testing.T, d *Disk, tfn func(*Disk)){
+func testOpen(t *testing.T, d *Disk, tfn func(*Disk)) {
 	defer tfn(d)
 	err := d.Open("test_image10", 10)
 	require.NoError(t, err)
@@ -39,7 +39,7 @@ func testOpen(t *testing.T, d *Disk, tfn func(*Disk)){
 	require.Equal(t, "test_image10", d.Name)
 	require.NotEqual(t, 0, d.FileDescriptor)
 	require.Equal(t, 0, int(d.Reads))
-	
+
 	err = d.Open("test_image30", 30)
 	require.NoError(t, err)
 	require.Equal(t, 30, int(d.Blocks))
@@ -48,7 +48,7 @@ func testOpen(t *testing.T, d *Disk, tfn func(*Disk)){
 	require.Equal(t, 0, int(d.Reads))
 }
 
-func testWrite(t *testing.T, d *Disk, tfn func(*Disk)){
+func testWrite(t *testing.T, d *Disk, tfn func(*Disk)) {
 	defer tfn(d)
 	err := d.Open("test_image10", 10)
 	require.NoError(t, err)
@@ -57,11 +57,11 @@ func testWrite(t *testing.T, d *Disk, tfn func(*Disk)){
 	err = d.Write(0, data)
 	require.NoError(t, err)
 	require.Equal(t, 1, int(d.Writes))
-	
+
 	err = d.Write(1, data)
 	require.NoError(t, err)
 	require.Equal(t, 2, int(d.Writes))
-	
+
 	// write to the same block
 	err = d.Write(1, data)
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func testWrite(t *testing.T, d *Disk, tfn func(*Disk)){
 
 }
 
-func testRead(t *testing.T, d *Disk, tfn func(*Disk)){
+func testRead(t *testing.T, d *Disk, tfn func(*Disk)) {
 	defer tfn(d)
 	err := d.Open("test_image10", 10)
 	require.NoError(t, err)
@@ -79,13 +79,13 @@ func testRead(t *testing.T, d *Disk, tfn func(*Disk)){
 	require.NoError(t, err)
 	// read from written block (0)
 	rdata := make([]byte, BLOCK_SIZE)
-	err = d.Read(0, rdata)
+	_, err = d.Read(0, rdata)
 	require.NoError(t, err)
 	require.Equal(t, 1, int(d.Reads))
 	require.Equal(t, "hello world!!", string(rdata[:13]))
 
-	// read from empty block 
-	err = d.Read(1, rdata)
+	// read from empty block
+	_, err = d.Read(1, rdata)
 	require.NoError(t, err)
 	require.Equal(t, 2, int(d.Reads))
 	// read null bytes ("\x00")

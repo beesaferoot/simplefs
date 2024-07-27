@@ -188,7 +188,7 @@ func (fs *FS) ReadDataBlock(blocknum int) (data DataBlock, err error) {
 	var buf [disk.BLOCK_SIZE]byte
 	data = DataBlock{}
 	// read inode block from disk
-	err = fs.disk.Read(blocknum, buf[:])
+	_, err = fs.disk.Read(blocknum, buf[:])
 	if err != nil {
 		return
 	}
@@ -234,6 +234,9 @@ func (fs *FS) Write(inumber int, data []byte) (inode *Inode, err error) {
 				break
 			}
 		}
+		if inodeBlock != nil {
+			break
+		}
 	}
 
 	if inode == nil {
@@ -247,7 +250,7 @@ func (fs *FS) Write(inumber int, data []byte) (inode *Inode, err error) {
 	// search for free disk blocks to write inode data into
 	for {
 		if !fs.isValidBlock(blocknum) {
-			return nil, errors.New("attempt to access disk block")
+			return nil, errors.New("attempt to access used disk block")
 		}
 
 		if fs.isFreeblock(blocknum) {
@@ -395,6 +398,10 @@ func (fs *FS) Create() (inumber int, err error) {
 			}
 		}
 
+		if inumber != -1 {
+			break
+		}
+
 	}
 
 	var buf [disk.BLOCK_SIZE]byte
@@ -411,6 +418,12 @@ func (fs *FS) Create() (inumber int, err error) {
 
 	err = fs.disk.Write(inodeBlockIdx, writeBuf.Bytes())
 
+	if err != nil {
+		return inumber, err
+	}
+
+	fs.superBlock.Inodes += 1
+	err = fs.writeSuperBlock()
 	return
 }
 
@@ -438,19 +451,24 @@ func (fs *FS) Cat(inumber int) error {
 
 func (fs *FS) initFreeBlockBitMap(dsk *disk.Disk) error {
 	var Pointers [POINTERS_PER_BLOCK]uint32
-	var buf [disk.BLOCK_SIZE]byte = [disk.BLOCK_SIZE]byte{}
+	var buf [disk.BLOCK_SIZE]byte
 	fs.freeBlockBitMap = make([]uint32, fs.superBlock.Blocks)
 	// set super block (0) as used
 	fs.freeBlockBitMap[0] = 1
-	for _, iblock := range fs.inodeBlocks {
+	for idx, iblock := range fs.inodeBlocks {
+		// set inode blocks index in free block as used (reserve)
+		fs.freeBlockBitMap[idx+1] = 1
 		for _, inode := range iblock.Inodes {
 			if inode.Size > 0 && inode.Valid == 1 {
 				for _, dblock := range inode.Direct {
-					fs.freeBlockBitMap[dblock] = 1
+					if dblock > 0 {
+						fs.freeBlockBitMap[dblock] = 1
+					}
+
 				}
 				if inode.Indirect > 0 {
 					fs.freeBlockBitMap[inode.Indirect] = 1
-					err := dsk.Read(int(inode.Indirect), buf[:])
+					_, err := dsk.Read(int(inode.Indirect), buf[:])
 					if err != nil {
 						return fmt.Errorf("failed to return indirect block (%d): %s", inode.Indirect, err.Error())
 					}
@@ -487,6 +505,7 @@ func (fs *FS) clearInodeBlocks(dsk *disk.Disk, sblock *SuperBlock, buf *bytes.Bu
 		if err != nil {
 			return fmt.Errorf("could not format: %s", err.Error())
 		}
+		fs.freeBlockBitMap[i] = 0
 	}
 
 	return nil
@@ -505,13 +524,14 @@ func (fs *FS) clearDataBlocks(dsk *disk.Disk, sblock *SuperBlock, buf *bytes.Buf
 		if err != nil {
 			return fmt.Errorf("could not format: %s", err.Error())
 		}
+		fs.freeBlockBitMap[i] = 0
 	}
 	return nil
 }
 
 func (fs *FS) loadInodeBlock(dsk *disk.Disk, blocknum int, block *InodeBlock) error {
 	var buf [disk.BLOCK_SIZE]byte
-	err := dsk.Read(blocknum, buf[:])
+	_, err := dsk.Read(blocknum, buf[:])
 	err = binary.Read(bytes.NewBuffer(buf[:]), enc, block)
 	if err != nil {
 		return fmt.Errorf("failed to read inode block: %s", err.Error())
@@ -533,7 +553,7 @@ func (fs *FS) loadInodeBlocks(dsk *disk.Disk, inodeblocks int, block []*InodeBlo
 
 func (fs *FS) loadSuperBlock(dsk *disk.Disk, sblock *SuperBlock) error {
 	var buf [disk.BLOCK_SIZE]byte
-	err := dsk.Read(0, buf[:])
+	_, err := dsk.Read(0, buf[:])
 	if err != nil {
 		return err
 	}
@@ -541,6 +561,25 @@ func (fs *FS) loadSuperBlock(dsk *disk.Disk, sblock *SuperBlock) error {
 	if err != nil {
 		return fmt.Errorf("failed to read superblock: %s", err.Error())
 	}
+	return nil
+}
+
+func (fs *FS) writeSuperBlock() error {
+
+	var buf [disk.BLOCK_SIZE]byte
+
+	writeBuf := bytes.NewBuffer(buf[:0])
+	err := binary.Write(writeBuf, enc, fs.superBlock)
+
+	if err != nil {
+		return fmt.Errorf("failed to write superblock: %s", err.Error())
+	}
+
+	err = fs.disk.Write(0, writeBuf.Bytes())
+	if err != nil {
+		return fmt.Errorf("failed to write superblock: %s", err.Error())
+	}
+
 	return nil
 }
 
