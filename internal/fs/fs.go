@@ -114,9 +114,9 @@ func (fs *FS) Debug(dsk *disk.Disk) error {
 
 func (fs *FS) Format(disk *disk.Disk) bool {
 	var err error
-	var sblock SuperBlock = SuperBlock{
+	var sblock = SuperBlock{
 		MagicNumber: MAGIC_NUMBER,
-		Blocks:      uint32(disk.Blocks),
+		Blocks:      disk.Blocks,
 		InodeBlocks: uint32(math.Round(float64(disk.Blocks) * 0.1)),
 		Inodes:      0,
 	}
