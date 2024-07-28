@@ -505,7 +505,10 @@ func (fs *FS) clearInodeBlocks(dsk *disk.Disk, sblock *SuperBlock, buf *bytes.Bu
 		if err != nil {
 			return fmt.Errorf("could not format: %s", err.Error())
 		}
-		fs.freeBlockBitMap[i] = 0
+		if len(fs.freeBlockBitMap) > int(i) {
+			fs.freeBlockBitMap[i] = 0
+		}
+
 	}
 
 	return nil
@@ -524,7 +527,9 @@ func (fs *FS) clearDataBlocks(dsk *disk.Disk, sblock *SuperBlock, buf *bytes.Buf
 		if err != nil {
 			return fmt.Errorf("could not format: %s", err.Error())
 		}
-		fs.freeBlockBitMap[i] = 0
+		if len(fs.freeBlockBitMap) > int(i) {
+			fs.freeBlockBitMap[i] = 0
+		}
 	}
 	return nil
 }
